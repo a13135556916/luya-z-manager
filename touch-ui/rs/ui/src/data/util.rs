@@ -140,9 +140,36 @@ pub fn objects(s: &[u8]) -> Vec<&[u8]> {
     found
 }
 
+/// `mode_main_state` in zwrt_zte_mc_tmp's text is the vendor's quick-boot standby
+/// (`mode_power_off_quicken`, or the charger one), not the `…_quickening` on the way there.
+/// The text is the file and then its uci delta (`…mode.mode_main_state='…'` lines): the last wins.
+pub fn mc_quicken(mc_tmp: &str) -> bool {
+    mc_tmp
+        .lines()
+        .filter(|l| l.contains("mode_main_state"))
+        .last()
+        .and_then(|l| l.split('\'').nth(1))
+        .is_some_and(|s| s.starts_with("mode_power_off_") && s.ends_with("_quicken"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quicken_standby() {
+        let m = |s: &str| format!("config zudata_mode_fun 'mode'\n\toption reboot_reason_code '1129'\n\toption mode_main_state '{s}'\n");
+        assert!(mc_quicken(&m("mode_power_off_quicken")));
+        assert!(mc_quicken(&m("mode_power_off_charger_quicken")));
+        assert!(!mc_quicken(&m("mode_power_off_quickening")));
+        assert!(!mc_quicken(&m("mode_power_on")));
+        assert!(!mc_quicken(&m("mode_power_on_charger")));
+        assert!(!mc_quicken(""));
+        // the vendor never commits: the state is in /tmp/.uci, after the stale file
+        let d = |s: &str| format!("{}zwrt_zte_mc_tmp.mode.mode_main_state='{s}'\n", m("mode_power_on"));
+        assert!(mc_quicken(&d("mode_power_off_quicken")));
+        assert!(!mc_quicken(&format!("{}{}", m("mode_power_off_quicken"), "zwrt_zte_mc_tmp.mode.mode_main_state='mode_power_on'\n")));
+    }
 
     #[test]
     fn capped_fields() {

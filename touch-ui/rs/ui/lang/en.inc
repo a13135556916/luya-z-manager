@@ -626,6 +626,8 @@
     { "手机经 U60 上网，同时充电", "Internet via the U60, while charging", NULL },
     { "18W 给手机快充，不上网", "18 W fast charging, no internet", NULL },
     { "USB 转网口等配件；手机只充电", "For USB Ethernet; phones only charge", NULL },
+    { "受电直供 + 上网", "Powered + internet", NULL },
+    { "笔记本供电，不走电池，同时上网", "Laptop powers it, no battery, + internet", NULL },
     { "插入的设备怎么用", "Use the plugged-in device for", NULL },
     { "记住选择，以后自动这样做", "Remember, do this every time", NULL },
     { "选一项，再点「确定」", "Pick one, then tap OK", NULL },

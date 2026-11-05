@@ -362,7 +362,7 @@ impl Ui {
             "s_auto_slept" => self.auto_slept = v != 0,
             "s_net_roam" => self.dg.net_roam = v != 0,
             "s_cf_usb" => {
-                self.conf.usb = [logic::UsbPref::Ask, logic::UsbPref::Share, logic::UsbPref::Fast, logic::UsbPref::Accessory]
+                self.conf.usb = [logic::UsbPref::Ask, logic::UsbPref::Share, logic::UsbPref::Fast, logic::UsbPref::Accessory, logic::UsbPref::Powered]
                     .get(v as usize)
                     .copied()
                     .unwrap_or_default()

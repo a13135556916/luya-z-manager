@@ -13,7 +13,7 @@ use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
 use ui_model::core_snapshot_t;
 
-const UM_ROWS: usize = 3;
+const UM_ROWS: usize = 4;
 const UM_ROW_H: i32 = 52;
 /// remembered choice: wait this long after the plug-in
 const UM_GRACE_MS: u32 = 3000;
@@ -23,9 +23,9 @@ const UM_PEND_MS: u32 = 75000; // Core write lock + USB preflight/write/readback
 const UM_DONE_MS: u32 = 1500;
 const UM_BANNER_MS: u32 = 5000;
 
-const UM_NAME: [&str; UM_ROWS] = [n_("充电 + 上网"), n_("快速充电宝"), n_("网口配件")];
-const UM_SUB: [&str; UM_ROWS] = [n_("手机经 U60 上网，同时充电"), n_("18W 给手机快充，不上网"), n_("USB 转网口等配件；手机只充电")];
-const PREFS: [UsbPref; 4] = [UsbPref::Ask, UsbPref::Share, UsbPref::Fast, UsbPref::Accessory];
+const UM_NAME: [&str; UM_ROWS] = [n_("充电 + 上网"), n_("快速充电宝"), n_("网口配件"), n_("受电直供 + 上网")];
+const UM_SUB: [&str; UM_ROWS] = [n_("手机经 U60 上网，同时充电"), n_("18W 给手机快充，不上网"), n_("USB 转网口等配件；手机只充电"), n_("笔记本供电，不走电池，同时上网")];
+const PREFS: [UsbPref; 5] = [UsbPref::Ask, UsbPref::Share, UsbPref::Fast, UsbPref::Accessory, UsbPref::Powered];
 
 #[derive(Clone)]
 pub struct Usb {
@@ -46,15 +46,17 @@ pub struct Usb {
     pend_at: u32,
     done_at: u32,
     auto_at: u32,
-    /// in effect now: 0 share, 1 fast charge, -1 neither
+    /// in effect now: 0 share, 1 fast charge, 3 powered, -1 none of them
     cur: i32,
     /// something in the port (cc = 1)
     attached: bool,
+    /// 受电直供 remembered: tried for this attachment
+    powered_tried: bool,
     banner: Vec<u8>,
     banner_at: u32,
     // the 系统 card
     now: Obj,
-    pref_mark: [Obj; 4],
+    pref_mark: [Obj; 5],
 }
 
 impl Default for Usb {
@@ -76,10 +78,11 @@ impl Default for Usb {
             auto_at: 0,
             cur: -1,
             attached: false,
+            powered_tried: false,
             banner: Vec::new(),
             banner_at: 0,
             now: Obj::NULL,
-            pref_mark: [Obj::NULL; 4],
+            pref_mark: [Obj::NULL; 5],
         }
     }
 }
@@ -93,6 +96,8 @@ fn usbmode_now_text(d: &core_snapshot_t) -> &'static str {
         tr("快速充电宝")
     } else if d.usb_power_role == "source" {
         if d.usb_data_role == "device" { tr("充电 + 上网") } else { tr("只充电，没有网络") }
+    } else if d.usb_data_role == "device" && d.dps_mode == 1 {
+        tr("受电直供 + 上网")
     } else {
         tr("U60 在充电")
     }
@@ -283,6 +288,8 @@ impl Ui {
             1
         } else if d.usb_power_role == "source" && d.usb_data_role == "device" {
             0
+        } else if d.usb_power_role == "sink" && d.usb_data_role == "device" && d.dps_mode == 1 {
+            3
         } else {
             -1
         };
@@ -302,6 +309,16 @@ impl Ui {
             if self.usbmode_visible() {
                 self.usbmode_close();
             }
+        }
+        // 受电直供 remembered: a computer feeding the U60 is never a phone's Plugged, and direct
+        // power is gone after a reboot; once per attachment, and not on a wall charger (no data)
+        if !self.um.attached {
+            self.um.powered_tried = false;
+        } else if self.conf.usb == UsbPref::Powered && self.um.cur != 3 && !self.um.powered_tried
+            && d.usb_power_role == "sink" && self.um.auto_at == 0 && self.um.pend < 0 && self.src.usb_data_link()
+        {
+            self.um.powered_tried = true;
+            self.um.auto_at = nz(now.wrapping_add(UM_GRACE_MS));
         }
         if self.um.auto_at != 0 && now.wrapping_sub(self.um.auto_at) as i32 >= 0 {
             self.um_auto_run();
@@ -353,7 +370,7 @@ impl Ui {
         let f = uf();
         let w = W - 16;
         // 16 = room under 确定, as at the top
-        let s = kit::sheet(300 + 16, Some(um_cancel_cb));
+        let s = kit::sheet(300 + UM_ROW_H + 16, Some(um_cancel_cb));
         let p = s.panel;
         let title = kit::label(p, f.cj15, th.t1, 0, 0, tr("插入的设备怎么用"));
         title.align(lv::LV_ALIGN_TOP_MID, 0, 12);
@@ -385,7 +402,7 @@ impl Ui {
     // ---- 系统页「插入手机等设备时」 ----
     pub(super) fn usbmode_pref_paint(&mut self) {
         let th = t();
-        for i in 0..4 {
+        for i in 0..PREFS.len() {
             let m = self.um.pref_mark[i];
             if m.is_null() {
                 return;
@@ -420,9 +437,9 @@ impl Ui {
 
     /// The card on the 系统 page at y; returns its height.
     pub(super) fn build_usbmode_card(&mut self, p: Obj, y: i32) -> i32 {
-        const PREF: [&str; 4] = [n_("每次询问"), n_("充电 + 上网"), n_("快速充电宝"), n_("网口配件")];
+        const PREF: [&str; 5] = [n_("每次询问"), n_("充电 + 上网"), n_("快速充电宝"), n_("网口配件"), n_("受电直供 + 上网")];
         let th = t();
-        let c = kit::card(p, MARGIN, y, CARD_W, 5 * ROW_H);
+        let c = kit::card(p, MARGIN, y, CARD_W, 6 * ROW_H);
         self.um.now = kit::row_nav(c, 0, tr("现在"), true, Some(um_now_cb), 0);
         self.um.now.set_style_text_font(uf().cj14, 0);
         for (i, pref) in PREF.iter().enumerate() {
@@ -436,6 +453,6 @@ impl Ui {
             self.um.pref_mark[i] = mk;
         }
         self.usbmode_pref_paint();
-        5 * ROW_H
+        6 * ROW_H
     }
 }

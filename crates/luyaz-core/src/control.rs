@@ -788,7 +788,7 @@ async fn sync_stock_ui_switch(want: bool) -> Result<(), String> {
 }
 /// 原厂屏幕（`zte_topsw_devui`）调这两个写时带的 `source_module`，照抄。
 const USB_SOURCE_MODULE: &str = "zte_topsw_devui";
-const USB_MODES: &[&str] = &["share", "fast_charge", "accessory"];
+const USB_MODES: &[&str] = &["share", "fast_charge", "accessory", "powered"];
 
 fn int_field(v: &Value, name: &str) -> Option<i64> {
     let f = v.get(name)?;
@@ -823,6 +823,9 @@ async fn poll_until(
 /// - `share`（充电 + 上网）：`zwrt_bsp.typec set DR_Swap device`，读回 `data_role` = device；
 /// - `fast_charge`（快速充电宝）：`zwrt_bsp.powerbank set state 1`，读回 `state` = 1；
 /// - `accessory`（网口配件）：原厂什么都不调，这里也不写，回 ok。
+/// - `powered`（受电直供 + 上网，原厂没有）：`PR_Swap sink` 读回 `power_role` = sink，再 share 的
+///   `DR_Swap device`，等 `charger_connect` = 1 后打开直供电（`power.direct_supply.set` 同一个写）。
+///   对方供不了电（手机）时 sink 读不回来，回失败，U60 还是供电方。2026-11-02 真机手工验证过这几步。
 ///
 /// 没插东西（`cc_attch_state` 不是 1）就不写。已经是要的状态不再写（`changed:false`）。
 /// `remembered:true`（触屏按记住的选择自动做）时，插着 USB 网口转接头（`zwrt_bsp.usb list` 的
@@ -831,7 +834,11 @@ async fn poll_until(
 async fn usb_attach_mode(params: &Value) -> Outcome {
     let mode = match string(params, "mode", true) {
         Ok(Some(m)) if USB_MODES.contains(&m.as_str()) => m,
-        Ok(_) => return Outcome::Invalid("mode must be share, fast_charge or accessory".into()),
+        Ok(_) => {
+            return Outcome::Invalid(
+                "mode must be share, fast_charge, accessory or powered".into(),
+            );
+        }
         Err(e) => return Outcome::Invalid(e),
     };
     let remembered = match object(params).get("remembered") {
@@ -852,9 +859,38 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
         |changed: bool| Outcome::Ok(json!({"mode": mode, "changed": changed, "verified": true}));
     match mode.as_str() {
         "accessory" => done(false),
-        "share" => {
-            if typec.get("data_role").and_then(Value::as_str) == Some("device") {
-                return done(false);
+        "share" | "powered" => {
+            let powered = mode == "powered";
+            let role = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+            let mut changed = false;
+            if powered && role(&typec, "power_role").as_deref() != Some("sink") {
+                let args = json!({"source_module": USB_SOURCE_MODULE, "PR_Swap": "sink"});
+                match call("zwrt_bsp.typec", "set", args).await {
+                    Outcome::Ok(_) => {}
+                    other => return other,
+                }
+                if !poll_until("zwrt_bsp.typec", "list", json!({}), 15, |v| {
+                    role(v, "power_role").as_deref() == Some("sink")
+                })
+                .await
+                {
+                    return Outcome::Failed(
+                        "the other end did not take over power (power_role stayed source)".into(),
+                    );
+                }
+                changed = true;
+            }
+            let data_device = if changed {
+                // the swap can move the data role too: read it again
+                match state::ubus("zwrt_bsp.typec", "list", json!({})).await {
+                    Ok(v) => role(&v, "data_role").as_deref() == Some("device"),
+                    Err(e) => return Outcome::Failed(e),
+                }
+            } else {
+                role(&typec, "data_role").as_deref() == Some("device")
+            };
+            if data_device {
+                return if powered { powered_supply(changed).await } else { done(false) };
             }
             if remembered {
                 match state::ubus("zwrt_bsp.usb", "list", json!({})).await {
@@ -877,7 +913,7 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
             })
             .await
             {
-                done(true)
+                if powered { powered_supply(true).await } else { done(true) }
             } else {
                 Outcome::Failed("USB role readback did not show data_role device".into())
             }
@@ -903,7 +939,27 @@ async fn usb_attach_mode(params: &Value) -> Outcome {
         }
     }
 }
-const NFC_FIELDS: &[Field] = &[int("enabled", "switch", true), int("flag", "flag", false)];
+/// `powered`'s last step: U60 is the sink with a network; wait for the charger to see the power
+/// (up to 2 s), then direct supply on.
+async fn powered_supply(changed: bool) -> Outcome {
+    if !poll_until(CHARGER, "list", json!({}), 10, |v| {
+        int_field(v, "charger_connect") == Some(1)
+    })
+    .await
+    {
+        return Outcome::Failed("U60 is the sink but the charger reports no power".into());
+    }
+    match direct_supply(&json!({"enabled": true})).await {
+        Outcome::Ok(d) => Outcome::Ok(json!({
+            "mode": "powered",
+            "changed": changed || d["changed"] == true,
+            "verified": true,
+        })),
+        other => other,
+    }
+}
+
+const NFC_FIELDS: &[Field] =&[int("enabled", "switch", true), int("flag", "flag", false)];
 
 /// NFC tap-to-join: store the setting, then ask the NFC service to pick it up.
 async fn nfc(params: &Value) -> Outcome {

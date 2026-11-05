@@ -409,6 +409,12 @@ impl Source for Replay {
     fn vendor_fallback(&mut self) {}
     fn power_fallback(&mut self, _reboot: bool) {}
     fn power_last_resort(&mut self, _reboot: bool) {}
+    fn vendor_quicken(&mut self) -> bool {
+        false
+    }
+    fn usb_data_link(&mut self) -> bool {
+        false
+    }
     fn lang_hold(&mut self) {}
     fn alert_theme_paused(&mut self) {}
     /// None, as C's render test had it (the switches read off); LUYAZ_RENDER_AUX="w24,w5,psm"

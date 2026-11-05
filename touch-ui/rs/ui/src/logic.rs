@@ -660,9 +660,11 @@ pub enum UsbPref {
     Share,
     Fast,
     Accessory,
+    /// 受电直供 + 上网: the other end powers the U60 (laptop), direct supply on
+    Powered,
 }
 
-const USB_PREF: [&str; 4] = ["ask", "share", "fast_charge", "accessory"];
+const USB_PREF: [&str; 5] = ["ask", "share", "fast_charge", "accessory", "powered"];
 
 pub fn usb_pref_name(p: UsbPref) -> &'static str {
     USB_PREF[p as usize]
@@ -672,7 +674,7 @@ pub fn usb_pref_name(p: UsbPref) -> &'static str {
 pub fn usb_pref_parse(s: &str) -> Option<UsbPref> {
     let w = s.split([' ', '\t', '\r', '\n']).next().unwrap_or("");
     let i = USB_PREF.iter().position(|&n| n == w)?;
-    Some([UsbPref::Ask, UsbPref::Share, UsbPref::Fast, UsbPref::Accessory][i])
+    Some([UsbPref::Ask, UsbPref::Share, UsbPref::Fast, UsbPref::Accessory, UsbPref::Powered][i])
 }
 
 pub const USB_UNPLUG_MS: u32 = 2000;
@@ -1086,6 +1088,7 @@ mod tests {
         assert_eq!(usb_pref_parse("shares"), None);
         assert_eq!(usb_pref_parse(usb_pref_name(UsbPref::Accessory)), Some(UsbPref::Accessory));
         assert_eq!(usb_pref_name(UsbPref::Ask), "ask");
+        assert_eq!(usb_pref_parse("powered"), Some(UsbPref::Powered));
 
         let mut t = UsbTrack::default();
         assert_eq!(usb_track(&mut t, 1, true, 100), UsbEv::None);

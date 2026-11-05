@@ -144,6 +144,7 @@ impl Ui {
             self.exit_menu_refresh();
         }
         self.vendor_arm_tick();
+        self.power_quick_tick();
         let ah = &m.agent_health;
         // an open incident lights it too, only on fresh data from a live core (design review 3A/4A)
         let inc_open = m.backend_silent == 0

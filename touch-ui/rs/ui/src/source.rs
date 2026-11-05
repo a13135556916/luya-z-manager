@@ -211,6 +211,10 @@ pub trait Source {
     fn power_fallback(&mut self, reboot: bool);
     /// 40 s and still up: busybox reboot / poweroff
     fn power_last_resort(&mut self, reboot: bool);
+    /// the vendor's power-off ended in its quick-boot standby (快速开机 on): Linux still up
+    fn vendor_quicken(&mut self) -> bool;
+    /// a USB gadget is configured: a computer or phone, not a wall charger, at the other end
+    fn usb_data_link(&mut self) -> bool;
     /// hold the 「正在切换」 frame before the exec (UI_LANG_HOLD_MS)
     fn lang_hold(&mut self);
     /// the alert for automatic appearance switching paused

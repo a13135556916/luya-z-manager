@@ -542,6 +542,15 @@ impl Source for Live {
     fn power_last_resort(&mut self, reboot: bool) {
         system(if reboot { "reboot" } else { "poweroff" });
     }
+    fn vendor_quicken(&mut self) -> bool {
+        // zte_topsw_mc sets it without a commit: the live value is in the delta
+        let r = |p| std::fs::read_to_string(p).unwrap_or_default();
+        util::mc_quicken(&(r("/etc/config/zwrt_zte_mc_tmp") + &r("/tmp/.uci/zwrt_zte_mc_tmp")))
+    }
+    fn usb_data_link(&mut self) -> bool {
+        std::fs::read_dir("/sys/class/udc").into_iter().flatten().flatten()
+            .any(|e| std::fs::read_to_string(e.path().join("state")).is_ok_and(|s| s.trim() == "configured"))
+    }
     fn lang_hold(&mut self) {
         std::thread::sleep(std::time::Duration::from_millis(LANG_HOLD_MS));
     }

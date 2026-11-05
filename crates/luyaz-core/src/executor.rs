@@ -390,11 +390,10 @@ impl Shared {
         }
         let usb_id = crate::device_profile::usb::capability(object, method);
         let usb_before = if let Some(id) = usb_id {
-            if object == "zwrt_bsp.typec"
-                && (args["DR_Swap"] != "device" || args.get("PR_Swap").is_some())
-            {
+            if object == "zwrt_bsp.typec" && !crate::device_profile::usb::typec_reviewed(args) {
                 return Err(UbusError::InvalidArgument(
-                    "only the reviewed DR_Swap device operation is supported".into(),
+                    "only the reviewed DR_Swap device or PR_Swap sink operation is supported"
+                        .into(),
                 ));
             }
             Some(self.usb_preflight(id, object).await?)
@@ -494,11 +493,18 @@ impl Shared {
         // 采集轮里用短超时（socket 2 秒），控制任务和内部任务用长超时（8 秒，V2-19）。
         self.live.call_started();
         let context_token = self.hub.firmware().token();
-        let r = {
+        let mut r = {
             let mut b = self.backend.lock().await;
             b.set_round(round);
             b.call(object, method, args).await
         };
+        if object == "zwrt_bsp.typec"
+            && method == "list"
+            && let Ok(v) = &mut r
+        {
+            use crate::device_profile::usb;
+            usb::typec_partner_fix(v, std::path::Path::new(usb::TYPEC_PARTNER).exists());
+        }
         if matches!(
             r,
             Err(UbusError::Io(_) | UbusError::Protocol(_) | UbusError::Timeout { .. })

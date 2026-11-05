@@ -159,6 +159,7 @@ fn change_of(action: &str, params: &Value) -> Words {
                 "share" => ("充电 + 上网", "charge + internet"),
                 "fast_charge" => ("快速充电宝", "fast charging"),
                 "accessory" => ("网口配件", "Ethernet adapter"),
+                "powered" => ("受电直供 + 上网", "powered + internet"),
                 _ => return None,
             };
             Some((zh.to_owned(), en.to_owned()))

@@ -24,6 +24,8 @@ pub struct Power {
     /// shutting down (0 / 1), -1 not
     going: i32,
     go_ms: u32,
+    /// the vendor's power-off is its quick-boot standby: dark until its power-on
+    quick: bool,
 }
 
 pub(super) unsafe extern "C" fn key_poll_cb(_t: *mut sys::lv_timer_t) {
@@ -95,7 +97,16 @@ impl Ui {
             self.power_menu_disarm();
         }
         let p = &self.pw;
-        if p.going >= 0 && now.wrapping_sub(p.go_ms) >= 40000 {
+        // 快速开机 on: the vendor's power-off stops at a standby with Linux up, and is done; the
+        // last resort's busybox poweroff would reboot the device instead
+        if p.going == 0 && !p.quick && self.src.vendor_quicken() {
+            self.pw.quick = true;
+            self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
+            self.src.bl_off();
+            self.sync();
+            return;
+        }
+        if p.going >= 0 && !p.quick && now.wrapping_sub(p.go_ms) >= 40000 {
             if now.wrapping_sub(p.go_ms) < 41000 {
                 // once: the last resort
                 let reboot = p.going != 0;
@@ -105,6 +116,17 @@ impl Ui {
                 self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
                 self.pw.going = -1;
             }
+        }
+    }
+
+    /// From refresh (every 5 s dark): the quick-boot standby ended with the vendor's power-on.
+    pub(super) fn power_quick_tick(&mut self) {
+        if self.pw.quick && !self.src.vendor_quicken() {
+            self.pw.quick = false;
+            self.pw.going = -1;
+            self.src.bl_on();
+            self.sync();
+            self.tgate.woke(lv::tick_get() as i64);
         }
     }
 
