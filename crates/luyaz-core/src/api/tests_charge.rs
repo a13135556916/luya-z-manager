@@ -227,6 +227,32 @@ async fn charge_control_and_the_limit_with_writes_on() {
     let dbg = crate::plugin::charge_policy::debug();
     assert_eq!(dbg["owner"], "u60d");
     assert_eq!(dbg["writes"][0]["why"], "unplugged");
+
+    // the limit off; direct supply remembered: a plug-in puts it back, under auto
+    *stopped.lock().unwrap() = Some(false);
+    let (st, _) = call(
+        addr,
+        "PUT",
+        "/api/device/charge-control",
+        "X-U60-Source: web\r\n",
+        r#"{"charge_limit_enabled":false}"#,
+    )
+    .await;
+    assert_eq!(st, 200);
+    let n = writes(&d).len();
+    tx.send(Job::PluggedIn).unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(writes(&d).len(), n, "nothing remembered: nothing written");
+    fs::create_dir_all(root.join("data/luyaz")).unwrap();
+    fs::write(root.join("data/luyaz/direct-supply.want"), "1\n").unwrap();
+    tx.send(Job::PluggedIn).unwrap();
+    wait("direct supply back", || writes(&d).len() == n + 1).await;
+    assert_eq!(writes(&d)[n], ("auto".to_string(), true));
+    // already on: nothing more
+    *stopped.lock().unwrap() = Some(true);
+    tx.send(Job::PluggedIn).unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(writes(&d).len(), n + 1);
 }
 
 /// Heat care's pause (thermal-care §4.2): stops, takes over a stop already there, gives back only

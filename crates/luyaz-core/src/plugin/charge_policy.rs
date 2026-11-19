@@ -126,7 +126,8 @@ struct State {
 /// What the loop asks the owner's executor to do (owned mode): the agent loop's three actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Job {
-    /// just plugged in, limit active: wait 500 ms, then enforce
+    /// just plugged in (or first seen plugged in), limit active: wait 500 ms, then enforce; limit
+    /// off and direct supply remembered: put it back
     PluggedIn,
     /// the periodic / change-driven enforcement
     Limit,
@@ -194,6 +195,8 @@ pub struct Observed {
     pub discharging: bool,
     /// u60d owns the part: hand the actions to the executor instead of proposing
     pub owned: bool,
+    /// the user's remembered choice is direct supply on (`charge::DIRECT_WANT`)
+    pub remembered: bool,
 }
 
 /// Called after every battery or charger block read.
@@ -248,6 +251,7 @@ pub fn tick(hub: &Hub) {
             capacity,
             discharging,
             owned: charge::owned(),
+            remembered: charge::remembered(),
         },
         limit,
         manual_override,
@@ -294,7 +298,7 @@ fn step(
     if o.owned {
         let mut jobs = Vec::new();
         match pass.plug {
-            Some(PlugStep::PluggedIn) if active => jobs.push(Job::PluggedIn),
+            Some(PlugStep::PluggedIn) if active || o.remembered => jobs.push(Job::PluggedIn),
             Some(PlugStep::Unplugged) => jobs.push(Job::Unplugged),
             _ => {}
         }

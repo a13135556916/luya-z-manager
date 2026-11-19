@@ -86,3 +86,24 @@ fn a_hand_written_resume_is_a_manual_resume() {
     assert!(!manual_resume_in(&w("auto", json!(false))), "the core's own");
     assert!(!manual_resume_in(&json!({"params": {"enabled": false}})), "no source");
 }
+
+#[test]
+fn a_direct_supply_choice_by_hand_is_web_or_screen_only() {
+    use super::charge::{choice_in, remembered_at};
+    let body = |source: &str, enabled: bool| {
+        serde_json::json!({"action": "power.direct_supply.set", "source": source, "params": {"enabled": enabled}})
+    };
+    assert_eq!(choice_in(&body("screen", true)), Some(true));
+    assert_eq!(choice_in(&body("web", false)), Some(false));
+    assert_eq!(choice_in(&body("auto", true)), None);
+
+    let f = std::env::temp_dir().join(format!("u60d-direct-want-{}", std::process::id()));
+    let p = f.to_str().unwrap();
+    let _ = std::fs::remove_file(&f);
+    assert!(!remembered_at(p));
+    std::fs::write(&f, "1\n").unwrap();
+    assert!(remembered_at(p));
+    std::fs::write(&f, "0\n").unwrap();
+    assert!(!remembered_at(p));
+    let _ = std::fs::remove_file(&f);
+}

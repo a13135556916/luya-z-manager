@@ -125,15 +125,47 @@ pub fn save(s: &Limit, file: &std::path::Path) {
 
 /// Every `/control` charge write that succeeded: the agent's own charge writes (source auto) go to the
 /// charge_policy comparison, a manual one (web/screen) sets the override mirror.
-/// A web or screen write that resumes charging (direct supply off).
-pub(crate) fn manual_resume_in(body: &Value) -> bool {
+/// The direct-supply choice in a web or screen write (`true` = direct supply on, charging stopped).
+pub(crate) fn choice_in(body: &Value) -> Option<bool> {
     let by_hand = body
         .get("source")
         .and_then(Value::as_str)
         .and_then(crate::ops::Source::parse)
         .is_some_and(|s| matches!(s, crate::ops::Source::Web | crate::ops::Source::Screen));
     let params = body.get("params").cloned().unwrap_or(Value::Null);
-    by_hand && crate::control::direct_supply_enabled(&params) == Ok(false)
+    by_hand
+        .then(|| crate::control::direct_supply_enabled(&params).ok())
+        .flatten()
+}
+
+/// A web or screen write that resumes charging (direct supply off).
+pub(crate) fn manual_resume_in(body: &Value) -> bool {
+    choice_in(body) == Some(false)
+}
+
+/// The user's last direct-supply choice by hand, kept across reboots ("1" on, "0" off); the
+/// charge policy puts "1" back on every plug-in, boot included, while the limit is off.
+pub const DIRECT_WANT: &str = "/data/luyaz/direct-supply.want";
+
+/// The remembered choice at `path` is direct supply on.
+pub fn remembered_at(path: impl AsRef<std::path::Path>) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|s| s.trim() == "1")
+}
+
+pub fn remembered() -> bool {
+    remembered_at(&crate::state::host_path(DIRECT_WANT))
+}
+
+/// The limit file's mtime, and whether it changed within [`SAVE_WINDOW`] (a settings save, whose
+/// enforcing write comes under the caller's source but is not a choice by hand).
+fn just_saved() -> (Option<SystemTime>, bool) {
+    let mtime = std::fs::metadata(crate::state::host_path(CHARGE_LIMIT))
+        .and_then(|m| m.modified())
+        .ok();
+    let fresh = mtime
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < SAVE_WINDOW);
+    (mtime, fresh)
 }
 
 pub fn observe_control(action: &str, body: &Value) {
@@ -141,6 +173,15 @@ pub fn observe_control(action: &str, body: &Value) {
         // owner 10-29: a manual resume beats a warm/hot heat pause until unplugged (the screen
         // writes /control directly, the web goes through charge-control: both end up here or there)
         crate::heat::manual_resume();
+    }
+    if action == "power.direct_supply.set"
+        && let Some(on) = choice_in(body)
+        && !just_saved().1
+    {
+        let path = crate::state::host_path(DIRECT_WANT);
+        if let Err(e) = std::fs::write(&path, if on { "1\n" } else { "0\n" }) {
+            eprintln!("[compat] charge: saving {path}: {e}");
+        }
     }
     if action != "power.direct_supply.set" || !super::enabled() || owned() {
         // owned: the override is what the route set, and the auto writes are u60d's own
@@ -163,12 +204,7 @@ pub fn observe_control(action: &str, body: &Value) {
             // Saving the limit settings rewrites the file and then enforces at once under the same
             // source: a charge write right after the file changed is that, not a manual stop. The
             // save cleared the override (agent `set`), so take the new mtime as seen and clear it.
-            let mtime = std::fs::metadata(crate::state::host_path(CHARGE_LIMIT))
-                .and_then(|m| m.modified())
-                .ok();
-            let fresh = mtime
-                .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age < SAVE_WINDOW);
+            let (mtime, fresh) = just_saved();
             let mut m = lock();
             if fresh {
                 m.manual_override = false;

@@ -22,6 +22,7 @@ fn obs(connected: bool, capacity: u8, stopped: bool) -> Observed {
         capacity,
         discharging: false,
         owned: false,
+        remembered: false,
     }
 }
 
@@ -200,4 +201,35 @@ fn owned_the_loop_hands_out_jobs_instead_of_proposing() {
         vec![]
     );
     assert!(g.proposals.is_empty(), "{:?}", g.proposals);
+}
+
+#[test]
+fn owned_a_remembered_direct_supply_comes_back_on_every_plug_in() {
+    const OFF: charge::Limit = charge::Limit {
+        enabled: false,
+        ..ON
+    };
+    let mut g = fresh();
+    let o = |connected, remembered| Observed {
+        owned: true,
+        remembered,
+        ..obs(connected, 60, false)
+    };
+    // first seen plugged in (boot) and every plug-in after an unplug
+    assert_eq!(
+        step(&mut g, o(true, true), OFF, false, 0.0, 1),
+        vec![Job::PluggedIn]
+    );
+    assert_eq!(step(&mut g, o(true, true), OFF, false, 70.0, 2), vec![]);
+    assert_eq!(
+        step(&mut g, o(false, true), OFF, false, 75.0, 3),
+        vec![Job::Unplugged]
+    );
+    assert_eq!(
+        step(&mut g, o(true, true), OFF, false, 80.0, 4),
+        vec![Job::PluggedIn]
+    );
+    // nothing remembered, limit off: a plug-in asks for nothing
+    let mut g = fresh();
+    assert_eq!(step(&mut g, o(true, false), OFF, false, 0.0, 1), vec![]);
 }

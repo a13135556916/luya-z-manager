@@ -142,7 +142,12 @@ async fn heat(c: &Compat, s: &Settings, active: bool) {
         return;
     };
     let capacity: u8 = sysfs(c, "capacity").parse().unwrap_or(0);
-    let limit_stops = active && capacity >= s.limit;
+    // a remembered direct supply wants charging stopped like a limit that is reached
+    let limit_stops = if active {
+        capacity >= s.limit
+    } else {
+        remembered(c)
+    };
     let (write, held) = heat_step(
         crate::heat::wants_pause(),
         crate::heat::held(),
@@ -158,6 +163,10 @@ async fn heat(c: &Compat, s: &Settings, active: bool) {
     crate::heat::set_held(held);
 }
 
+fn remembered(c: &Compat) -> bool {
+    charge::remembered_at(&c.path(charge::DIRECT_WANT))
+}
+
 /// One action of the policy loop (owned).
 async fn execute(c: &Compat, job: policy::Job) {
     let (s, manual_override) = charge::current();
@@ -168,6 +177,8 @@ async fn execute(c: &Compat, job: policy::Job) {
             tokio::time::sleep(c.clock.secs(1) / 2).await;
             if active {
                 enforce(c, "auto", &s, "plugged_in").await;
+            } else if remembered(c) && stopped_now(c).await == Some(false) {
+                set_charging(c, "auto", false, "remembered").await;
             }
         }
         policy::Job::Limit if active => enforce(c, "auto", &s, "limit").await,
