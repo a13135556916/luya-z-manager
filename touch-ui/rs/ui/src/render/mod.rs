@@ -211,6 +211,7 @@ impl Source for Replay {
             esim: true,
             speedtest: true,
             servers: true,
+            ladder: false,
             battery: false,
             versions: false,
             landing: false,
@@ -324,6 +325,21 @@ impl Source for Replay {
         self.acted();
         true
     }
+    fn ladder_start(&mut self, _busy_ok: bool, _roaming_ok: bool) {
+        self.acted();
+    }
+    fn ladder_stop(&mut self) {
+        self.acted();
+    }
+    fn ladder_dismiss(&mut self) {
+        self.acted();
+    }
+    fn ladder_browse(&mut self, _open: bool) {
+        self.acted();
+    }
+    fn ladder_open(&mut self, _i: usize) {
+        self.acted();
+    }
     fn speedtest_stop(&mut self) -> bool {
         self.acted();
         true
@@ -408,13 +424,13 @@ impl Source for Replay {
     }
     fn vendor_fallback(&mut self) {}
     fn power_fallback(&mut self, _reboot: bool) {}
-    fn power_last_resort(&mut self, _reboot: bool) {}
+    fn power_last_resort(&mut self) {}
     fn power_off_hard(&mut self) {}
-    fn vendor_quicken(&mut self) -> bool {
-        false
-    }
     fn usb_data_link(&mut self) -> bool {
         false
+    }
+    fn power_mode(&mut self) -> String {
+        String::new()
     }
     fn lang_hold(&mut self) {}
     fn alert_theme_paused(&mut self) {}

@@ -49,6 +49,8 @@ pub struct Activity {
     pub speed: bool,
     /// the 测速 page (its server list)
     pub speed_page: bool,
+    /// the load ladder page
+    pub ladder: bool,
     /// 系统 (the battery estimate)
     pub sys: bool,
     /// 健康与告警
@@ -71,6 +73,7 @@ pub struct Polled {
     pub esim: bool,
     pub speedtest: bool,
     pub servers: bool,
+    pub ladder: bool,
     pub battery: bool,
     pub versions: bool,
     /// 落地 changed
@@ -175,6 +178,15 @@ pub trait Source {
     fn speedtest_start(&mut self, chill: bool, roaming_ok: bool) -> bool;
     fn speedtest_stop(&mut self) -> bool;
     fn speedtest_select_server(&mut self, i: i32);
+    /// answers at once: the request goes out on its own thread (the core looks 3 s first)
+    fn ladder_start(&mut self, busy_ok: bool, roaming_ok: bool);
+    fn ladder_stop(&mut self);
+    /// leave the result screen (a kept run: back to the list)
+    fn ladder_dismiss(&mut self);
+    /// open or close the kept-runs list
+    fn ladder_browse(&mut self, open: bool);
+    /// open kept run `i` of the list
+    fn ladder_open(&mut self, i: usize);
     fn scenario_kick(&mut self);
     fn netinfo_act(&mut self, a: NiAct);
     /// "" = back to automatic
@@ -209,12 +221,13 @@ pub trait Source {
     fn vendor_fallback(&mut self);
     /// core could not be asked to power down: the vendor call directly
     fn power_fallback(&mut self, reboot: bool);
-    /// 40 s and still up: busybox reboot / poweroff
-    fn power_last_resort(&mut self, reboot: bool);
+    /// a reboot 40 s on and still up: busybox reboot
+    fn power_last_resort(&mut self);
+    /// the vendor's mode_main_state, live over ubus: zwrt_zte_mc_tmp on disk lags behind it
+    /// ("" = not read)
+    fn power_mode(&mut self) -> String;
     /// 真关机: sync, then the vendor's own real power-off (/sbin/sys_shutdown: reboot(2) POWER_OFF)
     fn power_off_hard(&mut self);
-    /// the vendor's power-off ended in its quick-boot standby (快速开机 on): Linux still up
-    fn vendor_quicken(&mut self) -> bool;
     /// a USB gadget is configured: a computer or phone, not a wall charger, at the other end
     fn usb_data_link(&mut self) -> bool;
     /// hold the 「正在切换」 frame before the exec (UI_LANG_HOLD_MS)

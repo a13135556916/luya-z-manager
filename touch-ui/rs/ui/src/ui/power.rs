@@ -11,8 +11,8 @@ use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
 
 const PW_NAME: [&str; 3] = [n_("睡眠"), n_("重启"), n_("关机")];
-/// 关机: the vendor's power-off, then from its quick-boot standby a real one (sys_shutdown);
-/// 睡眠 (0) is the vendor's power-off alone, its quick-boot standby
+/// 关机: the vendor's power-off, then from its fast power-off standby a real one (sys_shutdown);
+/// 睡眠 (0) is the vendor's power-off alone, its standby (fork, notes 2026-11-03)
 const HARD: i32 = 2;
 
 #[derive(Default, Clone)]
@@ -27,8 +27,23 @@ pub struct Power {
     /// shutting down (0 / 1 / 2), -1 not
     going: i32,
     go_ms: u32,
-    /// the vendor's power-off is its quick-boot standby: dark until its power-on
-    quick: bool,
+    mode_ms: u32,
+    /// the vendor's fast power-off took the request: Linux runs on, the screen stays dark
+    quick_off: bool,
+    /// 关机: sys_shutdown sent from the standby
+    hard_sent: bool,
+}
+
+/// Fast boot on: device_poweroff ends in mode_power_off_quickening, then _quicken (on a charger
+/// mode_power_off_charger_quicken), and this process goes on running. That is the power-off
+/// having worked, not having failed.
+fn is_quick_off(mode: &str) -> bool {
+    mode.starts_with("mode_power_off_") && mode.contains("quick")
+}
+
+/// Out of the standby again: the vendor's wake puts the device back in a power-on mode.
+fn is_power_on(mode: &str) -> bool {
+    mode == "mode_power_on" || mode == "mode_power_on_charger"
 }
 
 pub(super) unsafe extern "C" fn key_poll_cb(_t: *mut sys::lv_timer_t) {
@@ -70,10 +85,13 @@ impl Ui {
     }
 
     /// Through core (E4: it writes the request into the change log and waits for it to reach
-    /// flash first); core not there: the vendor call directly. Either way the 40 s last resort.
+    /// flash first); core not there: the vendor call directly. Either way the 40 s check.
     pub(super) fn power_run(&mut self, which: i32) {
         self.pw.going = which;
         self.pw.go_ms = lv::tick_get();
+        self.pw.mode_ms = self.pw.go_ms;
+        self.pw.quick_off = false;
+        self.pw.hard_sent = false;
         self.power_menu_set(false);
         let p = &self.pw;
         p.cover_lbl.set_text(match which {
@@ -86,10 +104,27 @@ impl Ui {
         self.src.bl_on();
         self.sync();
         lv::refr_now();
-        if self.data_control(if which == 1 { "device.reboot" } else { "device.poweroff" }, "{}", None) {
+        if self.data_control(if which != 0 { "device.reboot" } else { "device.poweroff" }, "{}", None) {
             return;
         }
-        self.src.power_fallback(which == 1);
+        self.src.power_fallback(which != 0);
+    }
+
+    /// The way out of the fast power-off. The modem, SIM and Wi-Fi stay off and nothing here can
+    /// bring them back: the vendor UI's wake is not ours, and the vendor refuses device_reboot
+    /// in these modes. A plain reboot works.
+    fn power_wake(&mut self) {
+        self.pw.quick_off = false;
+        self.pw.going = 1;
+        self.pw.go_ms = lv::tick_get();
+        let p = &self.pw;
+        p.cover_lbl.set_text(tr("正在重启…"));
+        p.cover.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
+        p.cover.move_foreground();
+        self.src.bl_on();
+        self.sync();
+        lv::refr_now();
+        self.src.power_last_resort();
     }
 
     /// Killed by the shutdown we started: the main loop leaves the panel dark on the way out.
@@ -103,31 +138,45 @@ impl Ui {
         if self.pw.arm >= 0 && now.wrapping_sub(self.pw.arm_ms) >= 5000 {
             self.power_menu_disarm();
         }
-        let p = &self.pw;
-        // 快速开机 on: the vendor's power-off stops at a standby with Linux up, and is done; the
-        // last resort's busybox poweroff would reboot the device instead
-        if (p.going == 0 || p.going == HARD) && !p.quick && self.src.vendor_quicken() {
-            if p.going == HARD {
-                // services already wound down by the vendor: cut the power; only if that returned
-                // does it carry on below as the standby
+        if (self.pw.going == 0 || self.pw.going == HARD) && now.wrapping_sub(self.pw.mode_ms) >= 2000 {
+            self.pw.mode_ms = now;
+            let mode = self.src.power_mode();
+            // 关机: the vendor has wound its services down in the standby (not on the way,
+            // …_quickening): cut the power; only if that returned does it stay the standby
+            if self.pw.going == HARD && !self.pw.hard_sent && mode.ends_with("_quicken") {
+                self.pw.hard_sent = true;
                 self.src.power_off_hard();
             }
-            self.pw.quick = true;
-            self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
-            self.src.bl_off();
-            self.sync();
+            if !self.pw.quick_off && is_quick_off(&mode) {
+                self.pw.quick_off = true;
+                self.auto_slept = false;
+                self.src.bl_off(); // the cover stays, dark, and swallows taps
+                self.sync();
+            } else if self.pw.quick_off && is_power_on(&mode) {
+                self.pw.quick_off = false;
+                self.pw.going = -1;
+                self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
+                self.src.bl_on();
+                self.sync();
+                self.tgate.woke(now as i64);
+                lv::trigger_activity();
+            }
+        }
+        if self.pw.quick_off {
             return;
         }
-        if p.going >= 0 && !p.quick && now.wrapping_sub(p.go_ms) >= 40000 {
+        let p = &self.pw;
+        if p.going >= 0 && now.wrapping_sub(p.go_ms) >= 40000 {
             if now.wrapping_sub(p.go_ms) < 41000 {
-                // once: the last resort
+                // once. Reboot only: busybox poweroff restarts this hardware instead of cutting
+                // the power, so a power-off that did not happen is reported, not retried.
                 let reboot = p.going == 1;
-                if p.going == HARD {
+                if reboot {
+                    self.src.power_last_resort();
+                } else if p.going == HARD {
                     self.src.power_off_hard();
-                } else {
-                    self.src.power_last_resort(reboot);
                 }
-                self.pw.cover_lbl.set_text(if reboot { tr("重启没成功，再试一次…") } else { tr("关机没成功，再试一次…") });
+                self.pw.cover_lbl.set_text(if reboot { tr("重启没成功，再试一次…") } else { tr("关机没成功，请再试一次") });
             } else if now.wrapping_sub(p.go_ms) >= 80000 {
                 self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
                 self.pw.going = -1;
@@ -135,21 +184,17 @@ impl Ui {
         }
     }
 
-    /// From refresh (every 5 s dark): the quick-boot standby ended with the vendor's power-on.
-    pub(super) fn power_quick_tick(&mut self) {
-        if self.pw.quick && !self.src.vendor_quicken() {
-            self.pw.quick = false;
-            self.pw.going = -1;
-            self.src.bl_on();
-            self.sync();
-            self.tgate.woke(lv::tick_get() as i64);
-        }
-    }
-
     /// The power key (key_poll_cb, every 50 ms; 1 s while the lit screen is quiet).
     fn key_poll(&mut self) {
         let ev = self.src.key_poll(lv::tick_get());
         if ev != KEY_EV_NONE {
+            // a dark screen may be a fast power-off started elsewhere (web, schedule)
+            if self.pw.quick_off
+                || (self.pw.going < 0 && !self.src.bl_is_lit(&self.model) && is_quick_off(&self.src.power_mode()))
+            {
+                self.power_wake();
+                return;
+            }
             // the key is not an LVGL input: without this a wake by the key was undone by the
             // auto-off below in the same pass (a one-frame flash)
             lv::trigger_activity();
@@ -252,5 +297,29 @@ impl Ui {
         c.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
         self.pw.cover = c;
         self.pw.cover_lbl = l;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_power_on, is_quick_off};
+
+    #[test]
+    fn fast_power_off_counts_as_done() {
+        assert!(is_quick_off("mode_power_off_quickening"));
+        assert!(is_quick_off("mode_power_off_quicken"));
+        assert!(is_quick_off("mode_power_off_charger_quicken"));
+        assert!(!is_quick_off("mode_power_off")); // the real one: this process is about to die
+        assert!(!is_quick_off("mode_power_off_charger")); // real off-charging
+        assert!(!is_quick_off("mode_power_on"));
+        assert!(!is_quick_off("")); // unread: keeps the 40 s check
+    }
+
+    #[test]
+    fn only_a_power_on_mode_ends_the_standby() {
+        assert!(is_power_on("mode_power_on"));
+        assert!(is_power_on("mode_power_on_charger"));
+        assert!(!is_power_on("mode_power_off_quicken"));
+        assert!(!is_power_on("")); // a read during the vendor's rewrite must not light the screen
     }
 }

@@ -19,6 +19,7 @@ use super::http;
 use super::netinfo::Netinfo;
 use super::scenario::Scenario;
 use super::screen_feed::{ScreenFeed, SfCfg};
+use super::ladder::Ladder;
 use super::speedtest::Speedtest;
 use super::tailscale::Tailscale;
 use super::util;
@@ -43,6 +44,7 @@ pub struct Live {
     alerts: Cached<Alerts>,
     esim: Cached<Esim>,
     speed: Cached<Speedtest>,
+    ladder: Cached<Ladder>,
     ts: Cached<Tailscale>,
     diag: Cached<Diagnose>,
     bat: Cached<BatteryEst>,
@@ -69,6 +71,7 @@ impl Live {
             alerts: Cached::new(Alerts::default()),
             esim: Cached::new(Esim::default()),
             speed: Cached::new(Speedtest::default()),
+            ladder: Cached::new(Ladder::default()),
             ts: Cached::new(Tailscale::default()),
             diag: Cached::new(Diagnose::default()),
             bat: Cached::new(BatteryEst::default()),
@@ -169,6 +172,7 @@ impl Live {
             st_servers: st.servers().to_vec(),
             st_selected_index: st.selected(),
             st_v2: st.v2().cloned(),
+            ladder: Some(self.ladder.model().clone()),
 
             agent_health: self.scenario.health(),
             scenario: self.scenario.status(),
@@ -287,6 +291,9 @@ impl Source for Live {
         });
         p.speedtest = speed & 1 != 0;
         p.servers = speed & 2 != 0;
+        let mut ag = self.agent.clone();
+        let active = a.ladder;
+        p.ladder = self.ladder.poll(move |s| s.poll(&mut ag, active) as u32) != 0;
         let mut ag = self.agent.clone();
         let sys = a.sys;
         // Home's battery cell: time left / to full
@@ -427,6 +434,23 @@ impl Source for Live {
     fn speedtest_start(&mut self, chill: bool, roaming_ok: bool) -> bool {
         self.speed.start(&mut self.agent, chill, roaming_ok)
     }
+    fn ladder_start(&mut self, busy_ok: bool, roaming_ok: bool) {
+        let agent = self.agent.clone();
+        self.ladder.start(agent, busy_ok, roaming_ok);
+    }
+    fn ladder_stop(&mut self) {
+        let agent = self.agent.clone();
+        self.ladder.stop(agent);
+    }
+    fn ladder_dismiss(&mut self) {
+        self.ladder.dismiss();
+    }
+    fn ladder_browse(&mut self, open: bool) {
+        self.ladder.browse(open);
+    }
+    fn ladder_open(&mut self, i: usize) {
+        self.ladder.open(i);
+    }
     fn speedtest_stop(&mut self) -> bool {
         self.speed.stop(&mut self.agent)
     }
@@ -528,28 +552,36 @@ impl Source for Live {
         unsafe { libc::raise(libc::SIGTERM) };
     }
     /// The vendor call the stock UI makes (zte_topsw_mc winds the services down, then a bare
-    /// reboot(2) with no sync: sync first); refused: busybox.
+    /// reboot(2) with no sync: sync first). Refused: busybox for a reboot; nothing for a
+    /// power-off, where busybox restarts this hardware (the 40 s check reports it).
     fn power_fallback(&mut self, reboot: bool) {
+        let (call, or_else) = if reboot { ("device_reboot", " || reboot") } else { ("device_poweroff", "") };
         let cmd = format!(
-            "( sync; ubus -t 10 call zwrt_mc.device.manager {} '{{\"moduleName\":\"zte_topsw_devui\"}}' >/dev/null 2>&1 || {} ) </dev/null >/dev/null 2>&1 &",
-            if reboot { "device_reboot" } else { "device_poweroff" },
-            if reboot { "reboot" } else { "poweroff" }
+            "( sync; ubus -t 10 call zwrt_mc.device.manager {call} '{{\"moduleName\":\"zte_topsw_devui\"}}' >/dev/null 2>&1{or_else} ) </dev/null >/dev/null 2>&1 &",
         );
-        if !system(&cmd) {
-            system(if reboot { "reboot" } else { "poweroff" });
+        if !system(&cmd) && reboot {
+            system("reboot");
         }
     }
-    fn power_last_resort(&mut self, reboot: bool) {
-        system(if reboot { "reboot" } else { "poweroff" });
+    fn power_last_resort(&mut self) {
+        system("reboot");
+    }
+    fn power_mode(&mut self) -> String {
+        std::process::Command::new("ubus")
+            .args(["-t", "2", "call", "zwrt_mc.device.manager", "get_device_info", r#"{"deviceInfoList":["mode_main_state"]}"#])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .find(|l| l.contains("\"mode_main_state\""))
+                    .and_then(|l| l.split('"').nth(3).map(str::to_string))
+            })
+            .unwrap_or_default()
     }
     fn power_off_hard(&mut self) {
         // not busybox poweroff: on this device that ends in a reboot (notes 2026-11-03)
         system("sync; /sbin/sys_shutdown");
-    }
-    fn vendor_quicken(&mut self) -> bool {
-        // zte_topsw_mc sets it without a commit: the live value is in the delta
-        let r = |p| std::fs::read_to_string(p).unwrap_or_default();
-        util::mc_quicken(&(r("/etc/config/zwrt_zte_mc_tmp") + &r("/tmp/.uci/zwrt_zte_mc_tmp")))
     }
     fn usb_data_link(&mut self) -> bool {
         std::fs::read_dir("/sys/class/udc").into_iter().flatten().flatten()
