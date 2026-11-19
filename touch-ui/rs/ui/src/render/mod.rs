@@ -409,6 +409,7 @@ impl Source for Replay {
     fn vendor_fallback(&mut self) {}
     fn power_fallback(&mut self, _reboot: bool) {}
     fn power_last_resort(&mut self, _reboot: bool) {}
+    fn power_off_hard(&mut self) {}
     fn vendor_quicken(&mut self) -> bool {
         false
     }

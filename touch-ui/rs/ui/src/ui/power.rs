@@ -1,5 +1,5 @@
 //! The power menu: a bottom sheet from a long press on the power key,
-//! 关机 / 重启 two taps each, then a full-screen 「正在关机…」; and the key's poll (key_poll_cb):
+//! 睡眠 / 重启 / 关机 two taps each, then a full-screen 「正在关机…」; and the key's poll (key_poll_cb):
 //! short = screen on/off, long = the menu, and the screen going off by itself.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
@@ -10,18 +10,21 @@ use crate::lang::{n_, tr};
 use crate::lv::{self, sys, Obj};
 use crate::theme::{t, uf};
 
-const PW_NAME: [&str; 2] = [n_("关机"), n_("重启")];
+const PW_NAME: [&str; 3] = [n_("睡眠"), n_("重启"), n_("关机")];
+/// 关机: the vendor's power-off, then from its quick-boot standby a real one (sys_shutdown);
+/// 睡眠 (0) is the vendor's power-off alone, its quick-boot standby
+const HARD: i32 = 2;
 
 #[derive(Default, Clone)]
 pub struct Power {
     pub sheet: Sheet,
-    lbl: [Obj; 2],
+    lbl: [Obj; 3],
     cover: Obj,
     cover_lbl: Obj,
     arm_ms: u32,
-    /// 0 = 关机 armed, 1 = 重启 armed, -1 none
+    /// 0 = 睡眠 armed, 1 = 重启 armed, 2 = 关机 armed, -1 none
     arm: i32,
-    /// shutting down (0 / 1), -1 not
+    /// shutting down (0 / 1 / 2), -1 not
     going: i32,
     go_ms: u32,
     /// the vendor's power-off is its quick-boot standby: dark until its power-on
@@ -62,7 +65,7 @@ impl Ui {
         }
         let l = p.lbl[p.arm as usize];
         l.set_text(tr(PW_NAME[p.arm as usize]));
-        l.set_style_text_color(if p.arm != 0 { t().acc_t } else { t().bad_t }, 0);
+        l.set_style_text_color(if p.arm == HARD { t().bad_t } else { t().acc_t }, 0);
         p.arm = -1;
     }
 
@@ -73,16 +76,20 @@ impl Ui {
         self.pw.go_ms = lv::tick_get();
         self.power_menu_set(false);
         let p = &self.pw;
-        p.cover_lbl.set_text(if which != 0 { tr("正在重启…") } else { tr("正在关机…") });
+        p.cover_lbl.set_text(match which {
+            1 => tr("正在重启…"),
+            HARD => tr("正在关机…"),
+            _ => tr("正在进入睡眠…"),
+        });
         p.cover.remove_flag(lv::LV_OBJ_FLAG_HIDDEN);
         p.cover.move_foreground();
         self.src.bl_on();
         self.sync();
         lv::refr_now();
-        if self.data_control(if which != 0 { "device.reboot" } else { "device.poweroff" }, "{}", None) {
+        if self.data_control(if which == 1 { "device.reboot" } else { "device.poweroff" }, "{}", None) {
             return;
         }
-        self.src.power_fallback(which != 0);
+        self.src.power_fallback(which == 1);
     }
 
     /// Killed by the shutdown we started: the main loop leaves the panel dark on the way out.
@@ -99,7 +106,12 @@ impl Ui {
         let p = &self.pw;
         // 快速开机 on: the vendor's power-off stops at a standby with Linux up, and is done; the
         // last resort's busybox poweroff would reboot the device instead
-        if p.going == 0 && !p.quick && self.src.vendor_quicken() {
+        if (p.going == 0 || p.going == HARD) && !p.quick && self.src.vendor_quicken() {
+            if p.going == HARD {
+                // services already wound down by the vendor: cut the power; only if that returned
+                // does it carry on below as the standby
+                self.src.power_off_hard();
+            }
             self.pw.quick = true;
             self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
             self.src.bl_off();
@@ -109,8 +121,12 @@ impl Ui {
         if p.going >= 0 && !p.quick && now.wrapping_sub(p.go_ms) >= 40000 {
             if now.wrapping_sub(p.go_ms) < 41000 {
                 // once: the last resort
-                let reboot = p.going != 0;
-                self.src.power_last_resort(reboot);
+                let reboot = p.going == 1;
+                if p.going == HARD {
+                    self.src.power_off_hard();
+                } else {
+                    self.src.power_last_resort(reboot);
+                }
                 self.pw.cover_lbl.set_text(if reboot { tr("重启没成功，再试一次…") } else { tr("关机没成功，再试一次…") });
             } else if now.wrapping_sub(p.go_ms) >= 80000 {
                 self.pw.cover.add_flag(lv::LV_OBJ_FLAG_HIDDEN);
@@ -210,17 +226,22 @@ impl Ui {
         p.arm = which;
         p.arm_ms = now;
         let l = p.lbl[which as usize];
-        l.set_text(if which != 0 { tr("再按一次重启") } else { tr("再按一次关机") });
+        l.set_text(match which {
+            1 => tr("再按一次重启"),
+            HARD => tr("再按一次关机"),
+            _ => tr("再按一次睡眠"),
+        });
         l.set_style_text_color(t().warn_t, 0);
     }
 
     pub(super) fn build_power_menu(&mut self) {
         let th = t();
-        let s = kit::sheet(120, Some(act_cancel));
+        let s = kit::sheet(160, Some(act_cancel));
         let title = kit::label(s.panel, uf().cj13, th.t3, 0, 0, tr("电源"));
         title.align(lv::LV_ALIGN_TOP_MID, 0, 12);
-        self.pw.lbl[0] = kit::sheet_item(&s, 38, tr("关机"), th.bad_t, Some(act_power), 0).0;
+        self.pw.lbl[0] = kit::sheet_item(&s, 38, tr("睡眠"), th.acc_t, Some(act_power), 0).0;
         self.pw.lbl[1] = kit::sheet_item(&s, 78, tr("重启"), th.acc_t, Some(act_power), 1).0;
+        self.pw.lbl[2] = kit::sheet_item(&s, 118, tr("关机"), th.bad_t, Some(act_power), HARD as usize).0;
         self.pw.sheet = s;
         self.pw.arm = -1;
         self.pw.going = -1;

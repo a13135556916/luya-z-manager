@@ -232,7 +232,16 @@ impl Ui {
         }
         let i = self.um.sel;
         self.um.sel = -1;
-        if i == 2 || i == self.um.cur {
+        self.um.powered_tried = true; // by hand: the remembered 受电直供 does not undo it
+        if i == 0 && self.um.cur == 3 {
+            // the computer feeds the U60: swapping power mid-attachment drops the USB data link
+            // (the U60's dwc3 runs only on the other end's VBUS, notes 2026-11-19); a fresh
+            // plug-in comes up as 充电 + 上网, so remember it and ask for one
+            self.conf.usb = PREFS[1];
+            self.conf.save();
+            self.usbmode_pref_paint();
+            self.um_status(tr("已记住 · 拔掉线再插上就生效"), th.ok_t);
+        } else if i == 2 || i == self.um.cur {
             self.um_status(tr("已生效"), th.ok_t);
             self.um.done_at = nz(lv::tick_get());
         } else if self.um_send(i, false) {
@@ -310,15 +319,19 @@ impl Ui {
                 self.usbmode_close();
             }
         }
-        // 受电直供 remembered: a computer feeding the U60 is never a phone's Plugged, and direct
-        // power is gone after a reboot; once per attachment, and not on a wall charger (no data)
+        // 受电直供 remembered: a computer is never a phone's Plugged, and direct power is gone
+        // after a reboot; not on a wall charger (no data). A Mac often comes up with the U60 as
+        // the source (notes 2026-11-19): usb.attach_mode powered swaps it. Decided once, at the
+        // first sight of the computer: a mode picked by hand later in this attachment stays.
         if !self.um.attached {
             self.um.powered_tried = false;
-        } else if self.conf.usb == UsbPref::Powered && self.um.cur != 3 && !self.um.powered_tried
-            && d.usb_power_role == "sink" && self.um.auto_at == 0 && self.um.pend < 0 && self.src.usb_data_link()
+        } else if self.conf.usb == UsbPref::Powered && !self.um.powered_tried
+            && d.usb_data_role == "device" && self.um.auto_at == 0 && self.um.pend < 0 && self.src.usb_data_link()
         {
             self.um.powered_tried = true;
-            self.um.auto_at = nz(now.wrapping_add(UM_GRACE_MS));
+            if self.um.cur != 3 {
+                self.um.auto_at = nz(now.wrapping_add(UM_GRACE_MS));
+            }
         }
         if self.um.auto_at != 0 && now.wrapping_sub(self.um.auto_at) as i32 >= 0 {
             self.um_auto_run();

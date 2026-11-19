@@ -96,11 +96,14 @@ tailscale|节点	Peers
 共 %d 条，都已读	%d total, all read
 关机	Power off
 关机没成功，再试一次…	Power off didn't work; trying again…
+睡眠	Sleep
+正在进入睡眠…	Going to sleep…
 关闭	Off
 其他告警（%s）	Other alert (%s)
 内存	Memory
 图表|内存	RAM
 再按一次关机	Tap again to power off
+再按一次睡眠	Tap again to sleep
 再按一次确认	Tap again to confirm
 再按一次确认 · 国外和漫游卡常没有 SA	Tap again · SA is often missing abroad
 再按一次确认切换	Tap again to switch
@@ -646,6 +649,7 @@ USB 转网口等配件；手机只充电	For USB Ethernet; phones only charge
 记住选择，以后自动这样做	Remember, do this every time
 选一项，再点「确定」	Pick one, then tap OK
 现在就是这样 · 点「确定」也可以记住它	Already in use · tap OK to remember it
+已记住 · 拔掉线再插上就生效	Remembered · unplug and plug in again
 点「确定」切换	Tap OK to switch
 确定	OK
 先选一项	Pick one first

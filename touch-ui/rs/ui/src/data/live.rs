@@ -542,6 +542,10 @@ impl Source for Live {
     fn power_last_resort(&mut self, reboot: bool) {
         system(if reboot { "reboot" } else { "poweroff" });
     }
+    fn power_off_hard(&mut self) {
+        // not busybox poweroff: on this device that ends in a reboot (notes 2026-11-03)
+        system("sync; /sbin/sys_shutdown");
+    }
     fn vendor_quicken(&mut self) -> bool {
         // zte_topsw_mc sets it without a commit: the live value is in the delta
         let r = |p| std::fs::read_to_string(p).unwrap_or_default();
